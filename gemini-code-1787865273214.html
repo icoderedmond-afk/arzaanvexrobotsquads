@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minecraft 2D Soccer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            overflow: hidden;
+        }
+        body, html {
+            width: 100%;
+            height: 100%;
+            background-color: #1a1a1a;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="gameCanvas"></canvas>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// Game State
+let W = canvas.width = window.innerWidth;
+let H = canvas.height = window.innerHeight;
+
+window.addEventListener('resize', () => {
+    W = canvas.width = window.innerWidth;
+    H = canvas.height = window.innerHeight;
+    initPositions();
+});
+
+const keys = {};
+window.addEventListener('keydown', e => keys[e.code] = true);
+window.addEventListener('keyup', e => keys[e.code] = false);
+
+// Physics & Field Settings
+const GRAVITY = 0.45;
+const FRICTION = 0.98;
+const GROUND_Y_OFFSET = 80;
+
+let groundY = H - GROUND_Y_OFFSET;
+let goalWidth = 100;
+let goalHeight = 220;
+
+// Entities
+const player = {
+    x: 0, y: 0, vx: 0, vy: 0,
+    w: 36, h: 70, speed: 6.5, jumpPower: -12,
+    grounded: false, score: 0, color: '#5b8731', headColor: '#c68b59', // Steve colors
+    runTimer: 0 // Tracks continuous running time in frames (60 = 1s)
+};
+
+const ai = {
+    x: 0, y: 0, vx: 0, vy: 0,
+    w: 36, h: 70, speed: 6, jumpPower: -12,
+    grounded: false, score: 0, color: '#e56b19', headColor: '#e0a96d', // Alex colors
+    powerShotDetected: false // Tracks active reaction state
+};
+
+const ball = {
+    x: 0, y: 0, vx: 0, vy: 0,
+    size: 24, r: 12,
+    bounciness: 0.75,
+    isPowerShot: false
+};
+
+function initPositions() {
+    groundY = H - GROUND_Y_OFFSET;
+    player.x = W * 0.25;
+    player.y = groundY - player.h;
+    player.vx = 0; player.vy = 0; player.runTimer = 0;
+
+    ai.x = W * 0.75 - ai.w;
+    ai.y = groundY - ai.h;
+    ai.vx = 0; ai.vy = 0; ai.powerShotDetected = false;
+
+    resetBall();
+}
+
+function resetBall() {
+    ball.x = W / 2;
+    ball.y = groundY - 200;
+    ball.vx = (Math.random() - 0.5) * 4;
+    ball.vy = 0;
+    ball.isPowerShot = false;
+    ai.powerShotDetected = false;
+}
+
+// Logic & Mechanics
+function updatePlayer() {
+    const isMoving = keys['KeyA'] || keys['ArrowLeft'] || keys['KeyD'] || keys['ArrowRight'];
+
+    if (keys['KeyA'] || keys['ArrowLeft']) player.vx = -player.speed;
+    else if (keys['KeyD'] || keys['ArrowRight']) player.vx = player.speed;
+    else player.vx = 0;
+
+    // Increment run timer if moving continuously
+    if (isMoving) {
+        player.runTimer++;
+    } else {
+        player.runTimer = 0;
+    }
+
+    if ((keys['KeyW'] || keys['Space'] || keys['ArrowUp']) && player.grounded) {
+        player.vy = player.jumpPower;
+        player.grounded = false;
+    }
+
+    player.vy += GRAVITY;
+    player.x += player.vx;
+    player.y += player.vy;
+
+    // Boundaries
+    if (player.x < 0) player.x = 0;
+    if (player.x + player.w > W) player.x = W - player.w;
+    if (player.y + player.h >= groundY) {
+        player.y = groundY - player.h;
+        player.vy = 0;
+        player.grounded = true;
+    }
+}
+
+function updateAI() {
+    const ballCenter = ball.x + ball.r;
+    const aiCenter = ai.x + ai.w / 2;
+
+    // Reaction logic for incoming Power Shot
+    if (ball.isPowerShot && !ai.powerShotDetected) {
+        ai.powerShotDetected = true;
+        const willBlock = Math.random() < 0.40; // 40% chance to block, 60% chance to miss
+        
+        if (willBlock && ai.grounded) {
+            // High jump timed to block high shot
+            ai.vy = ai.jumpPower * 1.25; 
+            ai.grounded = false;
+        } else if (ai.grounded) {
+            // Miss: Delayed jump, weak jump, or no jump
+            if (Math.random() < 0.5) {
+                ai.vy = ai.jumpPower * 0.4; // Too low jump
+                ai.grounded = false;
+            }
+        }
+    }
+
+    // Standard positioning logic if not power-shot locked
+    let targetX = ballCenter;
+    if (ball.x > W * 0.65 && ball.x > ai.x) {
+        targetX = ballCenter + 20;
+    } else if (ball.x < W * 0.4) {
+        targetX = W * 0.7;
+    }
+
+    // Horizontal Movement
+    if (aiCenter < targetX - 10) {
+        ai.vx = ai.speed;
+    } else if (aiCenter > targetX + 10) {
+        ai.vx = -ai.speed;
+    } else {
+        ai.vx = 0;
+    }
+
+    // Standard Jump Logic
+    if (!ball.isPowerShot) {
+        const distanceToBall = Math.hypot(ballCenter - aiCenter, ball.y - ai.y);
+        if (ai.grounded) {
+            if (distanceToBall < 110 && ball.y < ai.y - 20) {
+                ai.vy = ai.jumpPower;
+                ai.grounded = false;
+            } else if (ball.x > W * 0.6 && ball.vy < 0 && Math.random() < 0.03) {
+                ai.vy = ai.jumpPower;
+                ai.grounded = false;
+            }
+        }
+    }
+
+    ai.vy += GRAVITY;
+    ai.x += ai.vx;
+    ai.y += ai.vy;
+
+    // Boundaries
+    if (ai.x < 0) ai.x = 0;
+    if (ai.x + ai.w > W) ai.x = W - ai.w;
+    if (ai.y + ai.h >= groundY) {
+        ai.y = groundY - ai.h;
+        ai.vy = 0;
+        ai.grounded = true;
+    }
+}
+
+function updateBall() {
+    ball.vy += GRAVITY * 0.8;
+    ball.vx *= FRICTION;
+    ball.vy *= FRICTION;
+
+    ball.x += ball.vx;
+    ball.y += ball.vy;
+
+    // Ground bounce
+    if (ball.y + ball.size >= groundY) {
+        ball.y = groundY - ball.size;
+        ball.vy = -ball.vy * ball.bounciness;
+        if (Math.abs(ball.vy) < 1) ball.vy = 0;
+        ball.isPowerShot = false; // Reset power shot flag on bounce
+    }
+
+    // Wall bounce
+    if (ball.y <= 0) {
+        ball.y = 0;
+        ball.vy = -ball.vy;
+    }
+
+    // Left Goal Post / Net
+    if (ball.y > groundY - goalHeight) {
+        if (ball.x <= 15) {
+            ai.score++;
+            resetBall();
+            return;
+        }
+        if (ball.x + ball.size >= W - 15) {
+            player.score++;
+            resetBall();
+            return;
+        }
+    } else {
+        // Crossbars
+        if (ball.x < goalWidth && ball.y + ball.size >= groundY - goalHeight && ball.y <= groundY - goalHeight + 10) {
+            ball.vy = -Math.abs(ball.vy) * 0.8;
+        }
+        if (ball.x + ball.size > W - goalWidth && ball.y + ball.size >= groundY - goalHeight && ball.y <= groundY - goalHeight + 10) {
+            ball.vy = -Math.abs(ball.vy) * 0.8;
+        }
+    }
+
+    // Side Boundaries above goal height
+    if (ball.x <= 0) {
+        ball.x = 0;
+        ball.vx = -ball.vx * ball.bounciness;
+    }
+    if (ball.x + ball.size >= W) {
+        ball.x = W - ball.size;
+        ball.vx = -ball.vx * ball.bounciness;
+    }
+
+    // Entity Collisions
+    checkEntityBallCollision(player, true);
+    checkEntityBallCollision(ai, false);
+}
+
+function checkEntityBallCollision(ent, isPlayer) {
+    if (
+        ball.x < ent.x + ent.w &&
+        ball.x + ball.size > ent.x &&
+        ball.y < ent.y + ent.h &&
+        ball.y + ball.size > ent.y
+    ) {
+        // Player Power Shot Trigger (2 continuous seconds run time = 120 frames at 60fps)
+        if (isPlayer && player.runTimer >= 120) {
+            ball.vx = 22;            // Strong horizontal velocity toward AI goal
+            ball.vy = -14;           // High trajectory arc over defender's head
+            ball.isPowerShot = true;
+            player.runTimer = 0;     // Reset run timer
+            return;
+        }
+
+        // Landing on top of ball bounce
+        const entBottomPrevious = ent.y + ent.h - ent.vy;
+        if (ent.vy > 0 && entBottomPrevious <= ball.y + 10) {
+            ball.vy = -12;
+            ball.vx += ent.vx * 0.5;
+            ent.vy = -4;
+            return;
+        }
+
+        // Standard physics collision
+        const entCenterX = ent.x + ent.w / 2;
+        const entCenterY = ent.y + ent.h / 2;
+        const ballCenterX = ball.x + ball.size / 2;
+        const ballCenterY = ball.y + ball.size / 2;
+
+        let dx = ballCenterX - entCenterX;
+        let dy = ballCenterY - entCenterY;
+        let len = Math.hypot(dx, dy) || 1;
+
+        dx /= len;
+        dy /= len;
+
+        const impulse = 9;
+        ball.vx = dx * impulse + ent.vx * 0.5;
+        ball.vy = dy * impulse + ent.vy * 0.5;
+        ball.isPowerShot = false;
+    }
+}
+
+// Rendering Functions
+function drawEnvironment() {
+    // Sky
+    ctx.fillStyle = '#7ec0ee';
+    ctx.fillRect(0, 0, W, H);
+
+    // Clouds
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.fillRect(W * 0.1, 40, 120, 30);
+    ctx.fillRect(W * 0.15, 25, 100, 30);
+    ctx.fillRect(W * 0.65, 70, 160, 40);
+
+    // Dirt & Grass Floor
+    const blockSize = 32;
+    for (let x = 0; x < W; x += blockSize) {
+        ctx.fillStyle = '#5c8e32';
+        ctx.fillRect(x, groundY, blockSize, 12);
+        ctx.fillStyle = '#866043';
+        ctx.fillRect(x, groundY + 12, blockSize, H - groundY - 12);
+        ctx.fillStyle = '#573d26';
+        ctx.fillRect(x + 4, groundY + 24, 8, 8);
+        ctx.fillRect(x + 20, groundY + 48, 8, 8);
+    }
+
+    // Goals
+    drawGoal(0, groundY - goalHeight, goalWidth, goalHeight, true);
+    drawGoal(W - goalWidth, groundY - goalHeight, goalWidth, goalHeight, false);
+}
+
+function drawGoal(x, y, w, h, isLeft) {
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 4;
+    
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+    for (let gx = x; gx < x + w; gx += 16) {
+        ctx.moveTo(gx, y);
+        ctx.lineTo(gx, y + h);
+    }
+    for (let gy = y; gy < y + h; gy += 16) {
+        ctx.moveTo(x, gy);
+        ctx.lineTo(x + w, gy);
+    }
+    ctx.stroke();
+
+    ctx.fillStyle = '#a8a8a8';
+    if (isLeft) {
+        ctx.fillRect(x + w - 8, y, 8, h);
+        ctx.fillRect(x, y, w, 8);
+    } else {
+        ctx.fillRect(x, y, 8, h);
+        ctx.fillRect(x, y, w, 8);
+    }
+}
+
+function drawCharacter(ent, isSteve) {
+    ctx.fillStyle = ent.headColor;
+    ctx.fillRect(ent.x + 4, ent.y, 28, 24);
+
+    ctx.fillStyle = isSteve ? '#4a2f13' : '#b24e10';
+    ctx.fillRect(ent.x + 4, ent.y, 28, 6);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(ent.x + (isSteve ? 18 : 6), ent.y + 10, 8, 4);
+    ctx.fillStyle = isSteve ? '#2b45a0' : '#458b2b';
+    ctx.fillRect(ent.x + (isSteve ? 22 : 6), ent.y + 10, 4, 4);
+
+    ctx.fillStyle = ent.color;
+    ctx.fillRect(ent.x + 4, ent.y + 24, 28, 26);
+
+    ctx.fillStyle = isSteve ? '#2b45a0' : '#4f4f4f';
+    ctx.fillRect(ent.x + 6, ent.y + 50, 10, 20);
+    ctx.fillRect(ent.x + 20, ent.y + 50, 10, 20);
+}
+
+function drawBall() {
+    // Red tint visual indicator during Power Shot
+    ctx.fillStyle = ball.isPowerShot ? '#ff4444' : '#ffffff';
+    ctx.fillRect(ball.x, ball.y, ball.size, ball.size);
+    
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(ball.x + 4, ball.y + 4, 6, 6);
+    ctx.fillRect(ball.x + 14, ball.y + 14, 6, 6);
+    ctx.fillRect(ball.x + 4, ball.y + 14, 4, 4);
+    ctx.fillRect(ball.x + 14, ball.y + 4, 4, 4);
+}
+
+function drawUI() {
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '28px "Courier New", monospace';
+    ctx.shadowColor = '#000000';
+    ctx.shadowBlur = 4;
+    
+    ctx.fillText(`STEVE: ${player.score}`, 40, 50);
+    const aiScoreText = `ALEX: ${ai.score}`;
+    ctx.fillText(aiScoreText, W - ctx.measureText(aiScoreText).width - 40, 50);
+
+    ctx.font = '16px "Courier New", monospace';
+    ctx.fillText('Controls: A/D or Arrows to Move | W, Up, or Space to Jump', 40, 85);
+
+    // Power Shot Charge Bar Visual
+    const chargeRatio = Math.min(player.runTimer / 120, 1);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+    ctx.fillRect(40, 100, 150, 12);
+    ctx.fillStyle = chargeRatio >= 1 ? '#ffcc00' : '#00ffcc';
+    ctx.fillRect(40, 100, 150 * chargeRatio, 12);
+
+    if (chargeRatio >= 1) {
+        ctx.fillStyle = '#ffcc00';
+        ctx.fillText('POWER SHOT READY!', 200, 111);
+    }
+    
+    ctx.shadowBlur = 0;
+}
+
+// Main Game Loop
+function loop() {
+    updatePlayer();
+    updateAI();
+    updateBall();
+
+    ctx.clearRect(0, 0, W, H);
+    drawEnvironment();
+    drawCharacter(player, true);
+    drawCharacter(ai, false);
+    drawBall();
+    drawUI();
+
+    requestAnimationFrame(loop);
+}
+
+initPositions();
+loop();
+</script>
+
+</body>
+</html>
